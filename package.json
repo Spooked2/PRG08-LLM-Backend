@@ -1,0 +1,24 @@
+{
+  "name": "llm-backend",
+  "version": "1.0.0",
+  "description": "A project I'm being forced to make against my will",
+  "main": "main.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "node --env-file=.env --watch main.js"
+  },
+  "keywords": [
+    "digital",
+    "landfill"
+  ],
+  "author": "Sander Landmeter",
+  "license": "ISC",
+  "dependencies": {
+    "@langchain/core": "^0.3.44",
+    "@langchain/openai": "^0.5.5",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "langchain": "^0.3.21"
+  },
+  "type": "module"
+}
