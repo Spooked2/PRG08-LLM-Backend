@@ -1,4 +1,5 @@
-import {AzureChatOpenAI} from '@langchain/openai';
+import {AzureChatOpenAI, AzureOpenAIEmbeddings} from '@langchain/openai';
+import { FaissStore } from "@langchain/community/vectorstores/faiss";
 import express from 'express';
 import cors from 'cors';
 
@@ -49,6 +50,13 @@ const model = new AzureChatOpenAI({
     temperature: 1.5
 });
 
+const embeddingModel = new AzureOpenAIEmbeddings({
+    temperature: 0,
+    azureOpenAIApiEmbeddingsDeploymentName: process.env.AZURE_EMBEDDING_DEPLOYMENT_NAME
+});
+
+const vectorStore = await FaissStore.load('scp-914Vectors', embeddingModel);
+
 const app = express();
 app.use(cors());
 
@@ -89,6 +97,48 @@ app.post("/", async (req, res) => {
         res.setHeader("Content-Type", "text/plain");
 
         const stream = await model.stream(context.getChatHistory());
+
+        for await (const chunk of stream) {
+            res.write(chunk.content);
+        }
+
+        res.status(200);
+        res.end();
+
+    } catch (error) {
+
+        res.status(500);
+        res.json({error: 'Something went wrong!', message: error.message});
+
+    }
+
+});
+
+app.post('/scp', async (req, res) => {
+
+    const body = req.body;
+
+    if (!body?.input || !body?.setting) {
+
+        res.status(400);
+        return res.json({error: 'Please send a body with an input and setting property'});
+    }
+
+    const prompt = `Produce a test log. The input is ${body.input}. The setting is ${body.setting}.`;
+    const relevant = await vectorStore.similaritySearch(prompt);
+    const context = relevant.map(doc => doc.pageContent).join("\n\n");
+
+    const systemMessage = `You will produce test logs based on the human's input and the context. Everything after this sentence is the context. ${context}`;
+
+    const history = new Context(systemMessage, []);
+
+    history.addPrompt(prompt);
+
+    try {
+
+        res.setHeader("Content-Type", "text/plain");
+
+        const stream = await model.stream(history.getChatHistory());
 
         for await (const chunk of stream) {
             res.write(chunk.content);
