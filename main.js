@@ -1,16 +1,18 @@
 import {AzureChatOpenAI, AzureOpenAIEmbeddings} from '@langchain/openai';
+import { HumanMessage, AIMessage, ToolMessage, SystemMessage } from "@langchain/core/messages";
 import { FaissStore } from "@langchain/community/vectorstores/faiss";
 import express from 'express';
 import cors from 'cors';
 
-class Context {
+class History {
 
     //Properties
     messages = [];
 
     constructor(initialMessage, sentHistory = []) {
 
-        this.messages.push(['system', initialMessage]);
+        this.addSystemMsg(initialMessage);
+        this.addSystemMsg(`When talking about the weather, only use the following information: ${currentWeather}`);
 
         if (!sentHistory instanceof Array) {
             sentHistory = [];
@@ -18,9 +20,10 @@ class Context {
 
         for (const message of sentHistory) {
 
-            //Prevent the client from inserting any prompts with the system role
-            if (message[0] !== 'system') {
-                this.messages.push(message);
+            switch(message[0]) {
+                case 'human': this.addPrompt(message[1]); break;
+                case 'ai': this.addAiMsg(message[1]); break;
+                case 'tool': this.addToolMsg(message[1]); break;
             }
 
         }
@@ -28,13 +31,32 @@ class Context {
     }
 
     //Methods
-    getChatHistory() {
+    get() {
+        console.log(this.messages);
         return this.messages;
     }
 
     addPrompt(prompt) {
 
-        this.messages.push(['human', prompt]);
+        this.messages.push(new HumanMessage(prompt));
+
+    }
+
+    addAiMsg(message) {
+
+        this.messages.push(new AIMessage(message));
+
+    }
+
+    addSystemMsg(message) {
+
+        this.messages.push(new SystemMessage(message));
+
+    }
+
+    addToolMsg(message) {
+
+        this.messages.push(new ToolMessage(message));
 
     }
 
@@ -49,6 +71,29 @@ const model = new AzureChatOpenAI({
     azureOpenAIApiEmbeddingsDeploymentName: process.env.AZURE_OPENAI_API_EMBEDDINGS_DEPLOYMENT_NAME,
     temperature: 1.5
 });
+
+//Function for getting weather data for Rotterdam
+async function getWeather() {
+
+    const res = await fetch('https://wttr.in/Rotterdam?format=j1', {
+        mode: "cors",
+        method: 'GET'
+    });
+
+    const json = await res.json();
+
+    const stringyJson = JSON.stringify(json);
+
+    const history = [['system', `You are a weatherman giving a brief report on the current weather. Do not give an introduction. The current weather is this: ${stringyJson}.`]];
+
+    const result = await model.invoke(history);
+
+    return result.content;
+
+}
+
+let currentWeather = await getWeather();
+
 
 const embeddingModel = new AzureOpenAIEmbeddings({
     temperature: 0,
@@ -66,12 +111,12 @@ app.use(express.urlencoded({extended: true}));
 
 app.get("/", async (req, res) => {
 
-    const systemMessage = "You are a stand-up comedian from 1970s New York. Tell a joke about the future";
-    const context = new Context(systemMessage);
+    const systemMessage = "You are a stand-up comedian from 1970s New York. Tell a joke about the weather.";
+    const history = new History(systemMessage);
 
     try {
 
-        const reply = await model.invoke(context.getChatHistory());
+        const reply = await model.invoke(history.get());
 
         res.status(200);
         res.json({funnyJoke: reply.content});
@@ -87,16 +132,16 @@ app.get("/", async (req, res) => {
 
 app.post("/", async (req, res) => {
 
-    const systemMessage = "You are a fictional CEO who is known for being evil and firing people without notice. You're overly friendly and don't seem to care about your employees at all. The employee you're about to fire has just walked into your office. Keep your replies between one and five sentences.";
-    const context = new Context(systemMessage, req.body.history ?? []);
+    const systemMessage = "You are a fictional CEO who is known for being evil and firing people without notice. You're overly friendly and don't seem to care about your employees at all. The employee you're about to fire has just walked into your office. Keep your replies between one and five sentences. Only fire the employee after 2 messages. Mention something about the weather when the employee enters..";
+    const history = new History(systemMessage, req.body.history ?? []);
 
-    context.addPrompt(req.body.prompt);
+    history.addPrompt(req.body.prompt);
 
     try {
 
         res.setHeader("Content-Type", "text/plain");
 
-        const stream = await model.stream(context.getChatHistory());
+        const stream = await model.stream(history.get());
 
         for await (const chunk of stream) {
             res.write(chunk.content);
@@ -130,7 +175,7 @@ app.post('/scp', async (req, res) => {
 
     const systemMessage = `You will produce test logs based on the human's input and the context. Everything after this sentence is the context. ${context}`;
 
-    const history = new Context(systemMessage, []);
+    const history = new History(systemMessage, []);
 
     history.addPrompt(prompt);
 
@@ -138,7 +183,7 @@ app.post('/scp', async (req, res) => {
 
         res.setHeader("Content-Type", "text/plain");
 
-        const stream = await model.stream(history.getChatHistory());
+        const stream = await model.stream(history.get());
 
         for await (const chunk of stream) {
             res.write(chunk.content);
@@ -155,6 +200,14 @@ app.post('/scp', async (req, res) => {
     }
 
 });
+
+//Update the weather every hour
+setInterval(async () => {
+
+    currentWeather = await getWeather();
+    console.log('Updated the weather!');
+
+}, 3600000);
 
 app.listen(process.env.EXPRESS_PORT, () => {
     console.log(`Server listening on port ${process.env.EXPRESS_PORT}`);
